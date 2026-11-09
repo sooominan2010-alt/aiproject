@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from pathlib import Path
+import re
 
 # -----------------------------
 # 1. 페이지 설정
@@ -14,41 +15,74 @@ st.set_page_config(
 )
 
 st.title("🌡️ 월별 기온분석")
-st.write("원하는 월을 선택하면 전체 연도별 최고기온과 최저기온을 비교합니다.")
+st.write("월을 선택하여 전체 연도별 최고기온과 최저기온을 비교해 보세요.")
 
 # -----------------------------
-# 2. CSV 파일 불러오기
+# 2. CSV 파일 자동 찾기
+# -----------------------------
+def find_csv():
+    current = Path(__file__).resolve().parent
+
+    search_paths = [
+        current / "temperature.csv",
+        current.parent / "temperature.csv",
+        current.parent.parent / "temperature.csv",
+        Path.cwd() / "temperature.csv",
+        Path.cwd() / "pages" / "temperature.csv"
+    ]
+
+    for path in search_paths:
+        if path.is_file():
+            return path
+
+    return None
+
+
+# -----------------------------
+# 3. CSV 한글 인코딩 처리
 # -----------------------------
 @st.cache_data
-def load_data(file):
-    encodings = ["cp949", "utf-8-sig", "utf-8"]
+def load_data(file_bytes):
+    from io import BytesIO
 
-    for encoding in encodings:
+    for encoding in ["cp949", "utf-8-sig", "utf-8"]:
         try:
-            return pd.read_csv(file, encoding=encoding)
+            return pd.read_csv(
+                BytesIO(file_bytes),
+                encoding=encoding
+            )
         except UnicodeDecodeError:
             continue
 
-    raise ValueError("CSV 파일의 인코딩을 확인해 주세요.")
+    raise ValueError("CSV 인코딩을 확인할 수 없습니다.")
 
-file_path = Path(__file__).parent / "temperature.csv"
 
-if file_path.exists():
-    df = load_data(file_path)
+# 자동으로 CSV 찾기
+csv_path = find_csv()
+
+if csv_path is not None:
+    with open(csv_path, "rb") as f:
+        df = load_data(f.read())
+
 else:
+    st.warning(
+        "저장소에서 temperature.csv를 찾지 못했습니다. "
+        "CSV 파일이 GitHub 저장소에 업로드되어 있는지 확인해 주세요."
+    )
+
     uploaded_file = st.file_uploader(
-        "temperature.csv 파일을 업로드해 주세요.",
+        "temperature.csv 업로드",
         type=["csv"]
     )
 
     if uploaded_file is None:
-        st.info("CSV 파일을 업로드하면 분석이 시작됩니다.")
         st.stop()
 
-    df = load_data(uploaded_file)
+    df = load_data(uploaded_file.getvalue())
+
 
 # -----------------------------
-# 3. 데이터 전처리
+# 4. 데이터 확인
 # -----------------------------
 required_columns = [
     "일시",
@@ -68,7 +102,10 @@ df["최저기온(℃)"] = pd.to_numeric(
     df["최저기온(℃)"], errors="coerce"
 )
 
-# 날짜 형식: Oct-07 → 1907년 10월
+
+# -----------------------------
+# 5. 날짜에서 연도와 월 추출
+# -----------------------------
 month_map = {
     "Jan": 1, "Feb": 2, "Mar": 3,
     "Apr": 4, "May": 5, "Jun": 6,
@@ -76,25 +113,44 @@ month_map = {
     "Oct": 10, "Nov": 11, "Dec": 12
 }
 
-def parse_date(value):
-    try:
-        month_text, year_text = str(value).split("-")
+parsed_dates = []
 
-        short_year = int(year_text)
-        year = (
-            2000 + short_year
-            if short_year <= 26
-            else 1900 + short_year
-        )
+# 원본 데이터가 시간순으로 정렬된 경우
+# 1907년부터 1999년, 2000년 이후까지 처리
+century = 1900
+previous_year = None
 
-        month = month_map[month_text]
+for value in df["일시"]:
+    match = re.fullmatch(
+        r"\s*([A-Za-z]{3})-(\d{2})\s*",
+        str(value)
+    )
 
-        return pd.Series([year, month])
+    if match is None:
+        parsed_dates.append((None, None))
+        continue
 
-    except (ValueError, KeyError):
-        return pd.Series([None, None])
+    month_text = match.group(1).title()
+    short_year = int(match.group(2))
 
-df[["연도", "월"]] = df["일시"].apply(parse_date)
+    if month_text not in month_map:
+        parsed_dates.append((None, None))
+        continue
+
+    if (
+        previous_year is not None
+        and previous_year - short_year > 50
+    ):
+        century += 100
+
+    year = century + short_year
+    month = month_map[month_text]
+
+    parsed_dates.append((year, month))
+    previous_year = short_year
+
+df["연도"] = [x[0] for x in parsed_dates]
+df["월"] = [x[1] for x in parsed_dates]
 
 df = df.dropna(
     subset=["연도", "월"]
@@ -103,8 +159,9 @@ df = df.dropna(
 df["연도"] = df["연도"].astype(int)
 df["월"] = df["월"].astype(int)
 
+
 # -----------------------------
-# 4. 월 선택
+# 6. 월 선택
 # -----------------------------
 month_names = {
     1: "1월", 2: "2월", 3: "3월",
@@ -116,27 +173,30 @@ month_names = {
 selected_month = st.selectbox(
     "📅 분석할 월을 선택하세요.",
     options=list(month_names.keys()),
-    format_func=lambda x: month_names[x],
-    index=7
+    format_func=lambda x: month_names[x]
 )
 
+
 # -----------------------------
-# 5. 선택한 월의 데이터 분석
+# 7. 선택 월 데이터 분석
 # -----------------------------
-monthly_df = df[df["월"] == selected_month].copy()
+monthly_df = df[
+    df["월"] == selected_month
+].copy()
 
 monthly_df = monthly_df.sort_values("연도")
 
-# -----------------------------
-# 6. 그래프 생성
-# -----------------------------
 if monthly_df.empty:
     st.warning("선택한 월의 데이터가 없습니다.")
 
 else:
+
+    # -----------------------------
+    # 8. 그래프 생성
+    # -----------------------------
     fig = go.Figure()
 
-    # 최고기온 그래프
+    # 최고기온 - 핫핑크
     fig.add_trace(
         go.Scatter(
             x=monthly_df["연도"],
@@ -151,7 +211,7 @@ else:
         )
     )
 
-    # 최저기온 그래프
+    # 최저기온 - 하늘색
     fig.add_trace(
         go.Scatter(
             x=monthly_df["연도"],
@@ -167,11 +227,11 @@ else:
     )
 
     fig.update_layout(
-        title={
-            "text": "월별 기온분석",
-            "x": 0.5,
-            "xanchor": "center"
-        },
+        title=dict(
+            text="월별 기온분석",
+            x=0.5,
+            xanchor="center"
+        ),
         xaxis_title="연도",
         yaxis_title="온도 (℃)",
         legend_title="기온 구분",
@@ -194,9 +254,9 @@ else:
     )
 
     # -----------------------------
-    # 7. 주요 통계 표시
+    # 9. 통계 정보
     # -----------------------------
-    st.subheader("📊 선택한 월의 기온 통계")
+    st.subheader("📊 기온 통계")
 
     col1, col2, col3 = st.columns(3)
 
@@ -219,17 +279,18 @@ else:
         )
 
     # -----------------------------
-    # 8. 데이터 표
+    # 10. 상세 데이터
     # -----------------------------
-    with st.expander("연도별 상세 기온 데이터 보기"):
-        result = monthly_df[
-            ["연도", "최고기온(℃)", "최저기온(℃)"]
-        ]
+    st.subheader("📋 연도별 상세 데이터")
 
-        st.dataframe(
-            result,
-            use_container_width=True,
-            hide_index=True
-        )
+    result = monthly_df[
+        ["연도", "최고기온(℃)", "최저기온(℃)"]
+    ].copy()
 
-st.caption("데이터 출처: temperature.csv")
+    st.dataframe(
+        result,
+        use_container_width=True,
+        hide_index=True
+    )
+
+st.caption("기온 데이터 분석 | Pandas & Plotly")
