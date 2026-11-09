@@ -20,7 +20,7 @@ st.write("서울의 기온 데이터를 다양한 그래프로 분석합니다."
 
 PINK = "#FF1493"
 SKYBLUE = "#87CEEB"
-BLUE = "#4169E1
+BLUE = "#4169E1"
 
 # ==========================================
 # 2. CSV 파일 자동 검색
@@ -32,7 +32,8 @@ def find_csv():
         base / "temperature.csv",
         base.parent / "temperature.csv",
         base.parent.parent / "temperature.csv",
-        Path.cwd() / "temperature.csv"
+        Path.cwd() / "temperature.csv",
+        Path.cwd() / "pages" / "temperature.csv"
     ]
 
     for path in paths:
@@ -94,7 +95,6 @@ if not all(col in df.columns for col in required_columns):
     st.error("CSV 파일의 열 이름을 확인해 주세요.")
     st.stop()
 
-
 for col in [
     "평균기온(℃)",
     "최고기온(℃)",
@@ -105,6 +105,7 @@ for col in [
 
 # ==========================================
 # 5. 날짜에서 연도와 월 추출
+# 원본 데이터 순서에 따라 연도 계산
 # ==========================================
 month_map = {
     "Jan": 1, "Feb": 2, "Mar": 3,
@@ -113,35 +114,46 @@ month_map = {
     "Oct": 10, "Nov": 11, "Dec": 12
 }
 
-def parse_date(value):
-    match = re.fullmatch(
-        r"\s*([A-Za-z]{3})-(\d{2})\s*",
-        str(value)
-    )
+def parse_dates(series):
+    results = []
 
-    if not match:
-        return None, None
+    century = 1900
+    previous_year = None
 
-    month_text = match.group(1).title()
-    short_year = int(match.group(2))
+    for value in series:
+        match = re.fullmatch(
+            r"\s*([A-Za-z]{3})-(\d{2})\s*",
+            str(value)
+        )
 
-    if month_text not in month_map:
-        return None, None
+        if not match:
+            results.append((None, None))
+            continue
 
-    # 00~26은 2000년대
-    # 27~99는 1900년대
-    year = (
-        2000 + short_year
-        if short_year <= 26
-        else 1900 + short_year
-    )
+        month_text = match.group(1).title()
+        short_year = int(match.group(2))
 
-    month = month_map[month_text]
+        if month_text not in month_map:
+            results.append((None, None))
+            continue
 
-    return year, month
+        # 1999년 다음에 2000년으로 넘어갈 때
+        if (
+            previous_year is not None
+            and previous_year - short_year > 50
+        ):
+            century += 100
+
+        year = century + short_year
+        month = month_map[month_text]
+
+        results.append((year, month))
+        previous_year = short_year
+
+    return results
 
 
-parsed = df["일시"].apply(parse_date)
+parsed = parse_dates(df["일시"])
 
 df["연도"] = [x[0] for x in parsed]
 df["월"] = [x[1] for x in parsed]
@@ -194,7 +206,7 @@ def make_layout(fig, title):
 
 
 # ==========================================
-# 그래프 1. 기존 기능 복구
+# 그래프 1. 기존 기능
 # 선택한 월의 전체 연도별 최고/최저기온
 # ==========================================
 st.divider()
@@ -254,7 +266,7 @@ fig1.update_layout(
     template="plotly_white",
     xaxis=dict(
         showgrid=True,
-        dtick=1
+        dtick=10
     ),
     yaxis=dict(showgrid=True)
 )
@@ -330,7 +342,6 @@ selected_years = st.multiselect(
     max_selections=2
 )
 
-
 if len(selected_years) == 0:
 
     st.info("연도를 1개 또는 2개 선택해 주세요.")
@@ -345,7 +356,6 @@ else:
             df["연도"] == year
         ].sort_values("월")
 
-        # 월별 데이터
         year_data = (
             year_df.groupby("월")[
                 ["최고기온(℃)", "최저기온(℃)"]
@@ -354,11 +364,10 @@ else:
             .reindex(months)
         )
 
-        # 첫 번째 연도는 실선
-        # 두 번째 연도는 점선
+        # 첫 번째 연도는 실선, 두 번째 연도는 점선
         dash = "solid" if i == 0 else "dash"
 
-        # 최고기온
+        # 최고기온 - 핫핑크
         fig3.add_trace(
             go.Scatter(
                 x=months,
@@ -375,7 +384,7 @@ else:
             )
         )
 
-        # 최저기온
+        # 최저기온 - 하늘색
         fig3.add_trace(
             go.Scatter(
                 x=months,
@@ -393,7 +402,10 @@ else:
         )
 
     if len(selected_years) == 1:
-        title = f"{selected_years[0]}년 월별 최고기온 및 최저기온"
+        title = (
+            f"{selected_years[0]}년 "
+            "월별 최고기온 및 최저기온"
+        )
     else:
         title = (
             f"{min(selected_years)}년과 "
@@ -406,7 +418,6 @@ else:
         fig3,
         use_container_width=True
     )
-
 
     # ======================================
     # 선택한 연도 상세 데이터
