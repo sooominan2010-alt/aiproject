@@ -4,26 +4,23 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
 
 # -----------------------------
 # 페이지 설정
 # -----------------------------
 st.set_page_config(
-    page_title="붓꽃 품종 예측",
+    page_title="붓꽃 품종 예측 AI",
     page_icon="🌸",
     layout="wide"
 )
 
-st.title("🌸 붓꽃 품종 예측 프로그램")
-st.write(
-    "꽃잎의 길이와 너비를 입력하면 "
-    "머신러닝이 붓꽃의 품종을 예측합니다."
-)
-
-st.divider()
+st.title("🌸 AI 붓꽃 품종 예측 프로그램")
+st.write("꽃잎의 길이와 너비를 입력하고 3가지 머신러닝 알고리즘으로 품종을 예측해 보세요.")
 
 # -----------------------------
 # 데이터 불러오기
@@ -35,62 +32,147 @@ def load_data():
     except UnicodeDecodeError:
         data = pd.read_csv("Iris.csv", encoding="utf-8-sig")
 
+    # 열 이름 자동 정리
+    data.columns = data.columns.str.strip()
+
     return data
 
 try:
     df = load_data()
-except FileNotFoundError:
-    st.error("Iris.csv 파일을 찾을 수 없습니다.")
+except Exception as e:
+    st.error(f"데이터 파일을 불러오지 못했습니다: {e}")
     st.stop()
 
-# 필요한 열 확인
-required_columns = ["꽃잎 길이", "꽃잎 너비", "품종"]
+# 실제 CSV 열 이름에 맞게 설정
+column_map = {
+    "꽃잎 길이": ["꽃잎 길이", "PetalLengthCm", "petal_length"],
+    "꽃잎 너비": ["꽃잎 너비", "PetalWidthCm", "petal_width"],
+    "품종": ["품종", "Species", "species"]
+}
 
-if not all(col in df.columns for col in required_columns):
-    st.error("CSV 파일의 열 이름을 확인해 주세요.")
+def find_column(candidates):
+    for col in candidates:
+        if col in df.columns:
+            return col
+    return None
+
+length_col = find_column(column_map["꽃잎 길이"])
+width_col = find_column(column_map["꽃잎 너비"])
+species_col = find_column(column_map["품종"])
+
+if not all([length_col, width_col, species_col]):
+    st.error("CSV의 열 이름을 확인해 주세요.")
+    st.write("현재 CSV 열 이름:", list(df.columns))
     st.stop()
 
-df = df.dropna(subset=required_columns).copy()
+df = df[[length_col, width_col, species_col]].copy()
+df.columns = ["꽃잎 길이", "꽃잎 너비", "품종"]
+
+df["꽃잎 길이"] = pd.to_numeric(df["꽃잎 길이"], errors="coerce")
+df["꽃잎 너비"] = pd.to_numeric(df["꽃잎 너비"], errors="coerce")
+df = df.dropna()
 
 X = df[["꽃잎 길이", "꽃잎 너비"]]
 y = df["품종"]
 
 # -----------------------------
-# KNN 모델 생성
+# 알고리즘 설명
 # -----------------------------
-model = Pipeline([
-    ("scaler", StandardScaler()),
-    ("knn", KNeighborsClassifier(n_neighbors=5))
-])
+st.divider()
+st.subheader("🤖 사용할 머신러닝 알고리즘 선택")
+
+algorithm = st.selectbox(
+    "예측에 사용할 알고리즘을 선택하세요.",
+    [
+        "KNN (K-최근접 이웃)",
+        "Random Forest (랜덤 포레스트)",
+        "SVM (서포트 벡터 머신)"
+    ]
+)
+
+descriptions = {
+    "KNN (K-최근접 이웃)": """
+    **K-최근접 이웃 알고리즘**
+
+    - 입력한 꽃과 기존 꽃 데이터 사이의 거리를 계산합니다.
+    - 가장 가까운 데이터 5개를 찾습니다.
+    - 5개 중 가장 많이 등장한 품종으로 분류합니다.
+
+    **예시:** 주변 5개 중 Versicolor가 4개라면 Versicolor로 예측합니다.
+    """,
+
+    "Random Forest (랜덤 포레스트)": """
+    **랜덤 포레스트 알고리즘**
+
+    - 여러 개의 결정 트리를 만들어 학습합니다.
+    - 각 결정 트리가 입력한 꽃의 품종을 예측합니다.
+    - 여러 트리의 예측 결과를 종합해 최종 품종을 결정합니다.
+
+    **예시:** 100개의 결정 트리 중 가장 많은 표를 받은 품종을 선택합니다.
+    """,
+
+    "SVM (서포트 벡터 머신)": """
+    **서포트 벡터 머신 알고리즘**
+
+    - 서로 다른 품종을 구분하는 경계를 학습합니다.
+    - 품종 사이의 구분이 가장 잘 이루어지는 경계를 찾습니다.
+    - 새로운 꽃이 어느 영역에 위치하는지 판단합니다.
+
+    **예시:** 입력한 꽃이 학습한 분류 경계 중 어느 품종 영역에 속하는지 예측합니다.
+    """
+}
+
+with st.expander("📚 선택한 알고리즘의 원리 알아보기", expanded=True):
+    st.markdown(descriptions[algorithm])
+
+# -----------------------------
+# 모델 생성
+# -----------------------------
+if algorithm == "KNN (K-최근접 이웃)":
+    model = Pipeline([
+        ("scaler", StandardScaler()),
+        ("classifier", KNeighborsClassifier(n_neighbors=5))
+    ])
+
+elif algorithm == "Random Forest (랜덤 포레스트)":
+    model = RandomForestClassifier(
+        n_estimators=100,
+        random_state=42
+    )
+
+else:
+    model = Pipeline([
+        ("scaler", StandardScaler()),
+        ("classifier", SVC(
+            kernel="rbf",
+            C=1.0,
+            probability=True,
+            random_state=42
+        ))
+    ])
 
 model.fit(X, y)
 
 # -----------------------------
 # 데이터 정보
 # -----------------------------
+st.divider()
 st.subheader("📊 학습 데이터 정보")
 
-col1, col2, col3 = st.columns(3)
-
-col1.metric("전체 데이터", f"{len(df)}개")
-col2.metric("분류 품종", f"{y.nunique()}종")
-col3.metric("알고리즘", "KNN (K=5)")
-
-st.info(
-    "입력 범위는 실제 Iris 데이터의 꽃잎 측정값을 기준으로 설정했습니다."
-)
+c1, c2, c3 = st.columns(3)
+c1.metric("전체 데이터", f"{len(df)}개")
+c2.metric("붓꽃 품종", f"{y.nunique()}종")
+c3.metric("선택 알고리즘", algorithm.split(" (")[0])
 
 st.write("**입력 가능한 범위**")
-range1, range2 = st.columns(2)
-
-range1.write("🌷 꽃잎 길이: 1.0 ~ 6.9 cm")
-range2.write("🌷 꽃잎 너비: 0.1 ~ 2.5 cm")
-
-st.divider()
+r1, r2 = st.columns(2)
+r1.info("꽃잎 길이: 1.0 ~ 6.9 cm")
+r2.info("꽃잎 너비: 0.1 ~ 2.5 cm")
 
 # -----------------------------
 # 사용자 입력
 # -----------------------------
+st.divider()
 st.subheader("✏️ 꽃잎 크기 입력")
 
 col1, col2 = st.columns(2)
@@ -101,8 +183,7 @@ with col1:
         min_value=1.0,
         max_value=6.9,
         value=4.5,
-        step=0.1,
-        format="%.1f"
+        step=0.1
     )
 
 with col2:
@@ -111,76 +192,51 @@ with col2:
         min_value=0.1,
         max_value=2.5,
         value=1.3,
-        step=0.1,
-        format="%.1f"
+        step=0.1
     )
 
-# -----------------------------
-# 예측
-# -----------------------------
 user_data = pd.DataFrame({
     "꽃잎 길이": [petal_length],
     "꽃잎 너비": [petal_width]
 })
 
-prediction = model.predict(user_data)[0]
-
-# 가장 가까운 이웃 5개 찾기
-scaler = model.named_steps["scaler"]
-knn = model.named_steps["knn"]
-
-scaled_X = scaler.transform(X)
-scaled_user = scaler.transform(user_data)
-
-distances, indices = knn.kneighbors(
-    scaled_user,
-    n_neighbors=5
-)
-
-neighbors = df.iloc[indices[0]].copy()
-neighbors["거리"] = distances[0]
-
-vote_counts = neighbors["품종"].value_counts()
-
 # -----------------------------
 # 예측 결과
 # -----------------------------
+prediction = model.predict(user_data)[0]
+probabilities = model.predict_proba(user_data)[0]
+
 st.divider()
-st.subheader("🔍 예측 결과")
+st.subheader("🔍 품종 예측 결과")
 
-st.success(f"예측된 붓꽃 품종: {prediction}")
+st.success(f"🌸 예측된 품종: {prediction}")
 
-result_col1, result_col2 = st.columns(2)
+a, b = st.columns(2)
+a.metric("꽃잎 길이", f"{petal_length:.1f} cm")
+b.metric("꽃잎 너비", f"{petal_width:.1f} cm")
 
-result_col1.metric("입력한 꽃잎 길이", f"{petal_length:.1f} cm")
-result_col2.metric("입력한 꽃잎 너비", f"{petal_width:.1f} cm")
+# 확률 표시
+st.write("### 품종별 예측 확률")
 
-st.write("### 주변 데이터의 투표 결과")
-
-vote_df = pd.DataFrame({
-    "품종": vote_counts.index,
-    "가까운 이웃 수": vote_counts.values
-})
+prob_df = pd.DataFrame({
+    "품종": model.classes_,
+    "예측 확률": probabilities
+}).sort_values("예측 확률", ascending=False)
 
 st.bar_chart(
-    vote_df.set_index("품종"),
-    y="가까운 이웃 수"
+    prob_df.set_index("품종"),
+    y="예측 확률"
 )
 
-st.write(
-    "KNN은 입력한 꽃과 가장 가까운 데이터 5개를 찾아 "
-    "가장 많은 표를 받은 품종으로 분류합니다."
-)
+for _, row in prob_df.iterrows():
+    st.write(f"{row['품종']}: {row['예측 확률']:.1%}")
 
 # -----------------------------
 # 그래프 시각화
 # -----------------------------
 st.divider()
-st.subheader("📈 꽃잎 크기와 품종 분포 시각화")
+st.subheader("📈 품종 분류 그래프")
 
-fig, ax = plt.subplots(figsize=(11, 7))
-
-# 결정 영역 생성
 x_min, x_max = 1.0, 6.9
 y_min, y_max = 0.1, 2.5
 
@@ -196,8 +252,7 @@ grid = pd.DataFrame({
 
 Z = model.predict(grid)
 
-# 품종별 색상
-species = list(y.unique())
+species = list(model.classes_)
 colors = ["#F4A261", "#6495ED", "#B07CC6"]
 
 color_map = {
@@ -205,11 +260,12 @@ color_map = {
     for i, name in enumerate(species)
 }
 
-# 결정 영역 표시
 Z_num = pd.Categorical(
     Z,
     categories=species
 ).codes.reshape(xx.shape)
+
+fig, ax = plt.subplots(figsize=(11, 7))
 
 ax.contourf(
     xx,
@@ -217,10 +273,10 @@ ax.contourf(
     Z_num,
     levels=np.arange(-0.5, len(species) + 0.5, 1),
     colors=[color_map[s] for s in species],
-    alpha=0.13
+    alpha=0.15
 )
 
-# 전체 붓꽃 데이터 표시
+# 기존 데이터 표시
 for name in species:
     subset = df[df["품종"] == name]
 
@@ -233,101 +289,131 @@ for name in species:
         s=45
     )
 
-# 가장 가까운 이웃 5개 강조
-ax.scatter(
-    neighbors["꽃잎 길이"],
-    neighbors["꽃잎 너비"],
-    s=180,
-    facecolors="none",
-    edgecolors="black",
-    linewidths=1.5,
-    label="가장 가까운 이웃 5개"
-)
-
-# 사용자가 입력한 값: 초록색 별
+# 사용자 입력값
 ax.scatter(
     petal_length,
     petal_width,
     marker="*",
-    s=450,
+    s=500,
     color="green",
     edgecolors="black",
-    linewidths=1,
-    label="내가 입력한 값",
+    linewidths=1.2,
+    label="사용자 입력값",
     zorder=10
 )
 
-ax.set_xlabel("꽃잎 길이 (cm)", fontsize=12)
-ax.set_ylabel("꽃잎 너비 (cm)", fontsize=12)
-ax.set_title("KNN 붓꽃 품종 분류 결과", fontsize=16)
-
+ax.set_xlabel("꽃잎 길이 (cm)")
+ax.set_ylabel("꽃잎 너비 (cm)")
+ax.set_title(f"{algorithm} 품종 분류 결과")
 ax.set_xlim(x_min, x_max)
 ax.set_ylim(y_min, y_max)
-
 ax.grid(alpha=0.2)
-ax.legend(loc="best")
+ax.legend()
 
 st.pyplot(fig)
 plt.close(fig)
 
-# -----------------------------
-# 분류 이유 분석
-# -----------------------------
-st.divider()
-st.subheader("🧠 왜 이 품종으로 분류되었을까?")
-
-st.write(
-    f"입력한 꽃잎의 크기는 길이 {petal_length:.1f}cm, "
-    f"너비 {petal_width:.1f}cm입니다."
+st.info(
+    "그래프의 배경색은 선택한 알고리즘이 각 위치에서 "
+    "예측하는 품종을 나타냅니다. 초록색 별은 입력한 꽃의 위치입니다."
 )
 
-st.write("가장 가까운 데이터 5개를 확인해 보겠습니다.")
+# -----------------------------
+# 가장 가까운 데이터 분석
+# -----------------------------
+st.divider()
+st.subheader("🔎 입력값과 기존 데이터 비교")
 
-display_neighbors = neighbors[
-    ["꽃잎 길이", "꽃잎 너비", "품종", "거리"]
-].copy()
+# 표준화한 거리로 최근접 이웃 계산
+scaler = StandardScaler()
+scaled_X = scaler.fit_transform(X)
+scaled_user = scaler.transform(user_data)
 
-display_neighbors["거리"] = display_neighbors["거리"].round(3)
+distances = np.sqrt(
+    np.sum((scaled_X - scaled_user) ** 2, axis=1)
+)
+
+neighbor_indices = np.argsort(distances)[:5]
+
+neighbors = df.iloc[neighbor_indices].copy()
+neighbors["거리"] = distances[neighbor_indices]
+
+st.write("입력한 꽃과 가장 가까운 데이터 5개입니다.")
 
 st.dataframe(
-    display_neighbors.reset_index(drop=True),
+    neighbors.reset_index(drop=True).round(3),
     use_container_width=True
 )
 
-st.write("### 품종별 투표 현황")
+# -----------------------------
+# 알고리즘별 결과 비교
+# -----------------------------
+st.divider()
+st.subheader("⚖️ 3가지 알고리즘 예측 결과 비교")
 
-for name in species:
-    count = int(vote_counts.get(name, 0))
+models = {
+    "KNN": Pipeline([
+        ("scaler", StandardScaler()),
+        ("classifier", KNeighborsClassifier(n_neighbors=5))
+    ]),
+    "Random Forest": RandomForestClassifier(
+        n_estimators=100,
+        random_state=42
+    ),
+    "SVM": Pipeline([
+        ("scaler", StandardScaler()),
+        ("classifier", SVC(
+            kernel="rbf",
+            probability=True,
+            random_state=42
+        ))
+    ])
+}
 
-    st.write(f"**{name}** : {count}표")
-    st.progress(count / 5)
+comparison = []
 
-winner_count = int(vote_counts.max())
+for name, comparison_model in models.items():
+    comparison_model.fit(X, y)
 
-st.success(
-    f"가장 가까운 5개 중 {winner_count}개가 "
-    f"{prediction} 품종으로 분류되었습니다."
+    result = comparison_model.predict(user_data)[0]
+    confidence = comparison_model.predict_proba(user_data)[0].max()
+
+    comparison.append({
+        "알고리즘": name,
+        "예측 품종": result,
+        "가장 높은 예측 확률": f"{confidence:.1%}"
+    })
+
+comparison_df = pd.DataFrame(comparison)
+
+st.dataframe(
+    comparison_df,
+    use_container_width=True,
+    hide_index=True
 )
 
-st.info(
-    "그래프의 배경색은 KNN이 각 위치에서 예측하는 품종 영역입니다. "
-    "초록색 별은 사용자가 입력한 꽃의 위치이며, "
-    "검은색 테두리 원은 가장 가까운 데이터 5개입니다."
+st.caption(
+    "예측 확률은 각 모델의 추정값이며, 실제 정답일 확률을 보장하지 않습니다."
 )
 
 # -----------------------------
-# 알고리즘 설명
+# 마무리 설명
 # -----------------------------
-with st.expander("💡 KNN 알고리즘이란?"):
-    st.write("""
-    KNN(K-Nearest Neighbors)은 K-최근접 이웃 알고리즘입니다.
+st.divider()
 
-    1. 새로운 꽃의 꽃잎 길이와 너비를 입력합니다.
-    2. 기존 데이터와의 거리를 계산합니다.
-    3. 가장 가까운 데이터 5개를 찾습니다.
-    4. 가장 많이 등장한 품종을 예측 결과로 선택합니다.
+with st.expander("💡 세 가지 알고리즘 비교 정리"):
+    st.markdown("""
+    | 알고리즘 | 예측 원리 | 장점 |
+    |---|---|---|
+    | KNN | 가까운 데이터 비교 | 원리가 간단함 |
+    | 랜덤 포레스트 | 여러 결정 트리의 결과 종합 | 다양한 패턴 학습 |
+    | SVM | 품종을 구분하는 경계 학습 | 복잡한 분류 경계에 활용 |
 
-    이번 프로그램은 꽃잎 길이와 너비의 단위 차이에 따른
-    영향을 줄이기 위해 StandardScaler로 데이터를 표준화했습니다.
+    **분석할 때 확인할 점**
+
+    같은 꽃잎 크기를 입력해도 알고리즘에 따라
+    예측 품종이나 예측 확률이 달라질 수 있습니다.
+
+    이는 알고리즘마다 데이터를 학습하고 분류하는
+    방법이 다르기 때문입니다.
     """)
-
