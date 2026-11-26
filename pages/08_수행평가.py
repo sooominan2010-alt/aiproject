@@ -17,57 +17,41 @@ st.title("🏢 서울에서 부동산 취득이 가장 많은 지역은?")
 st.write("2014년부터 2018년까지 서울시 부동산 소유권 취득 현황을 분석합니다.")
 
 # =====================================
-# 2. 파일 경로
+# 2. CSV 파일 자동 불러오기
 # =====================================
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_FILE = BASE_DIR / "soominan.csv"
 
-# =====================================
-# 3. CSV 불러오기
-# =====================================
-
 @st.cache_data
-def load_data(uploaded_file=None):
-
+def load_data():
     encodings = ["utf-8-sig", "utf-8", "cp949", "euc-kr"]
 
-    if uploaded_file is not None:
-        for encoding in encodings:
-            try:
-                uploaded_file.seek(0)
-                return pd.read_csv(uploaded_file, encoding=encoding)
-            except UnicodeDecodeError:
-                continue
-
-    elif DATA_FILE.exists():
-        for encoding in encodings:
-            try:
-                return pd.read_csv(DATA_FILE, encoding=encoding)
-            except UnicodeDecodeError:
-                continue
+    for encoding in encodings:
+        try:
+            return pd.read_csv(DATA_FILE, encoding=encoding)
+        except UnicodeDecodeError:
+            continue
 
     return None
 
 
-uploaded_file = st.sidebar.file_uploader(
-    "CSV 파일 업로드",
-    type=["csv"]
-)
+if not DATA_FILE.exists():
+    st.error("soominan.csv 파일을 찾을 수 없습니다.")
+    st.stop()
 
 try:
-    df = load_data(uploaded_file)
+    df = load_data()
 except Exception as e:
-    st.error(f"파일을 읽는 중 오류가 발생했습니다: {e}")
+    st.error(f"CSV 파일을 읽을 수 없습니다: {e}")
     st.stop()
 
 if df is None:
-    st.error("soominan.csv 파일을 찾을 수 없습니다.")
-    st.info("CSV 파일이 최상위 폴더에 있는지 확인해 주세요.")
+    st.error("CSV 파일의 인코딩을 확인해 주세요.")
     st.stop()
 
 # =====================================
-# 4. 데이터 전처리
+# 3. 데이터 전처리
 # =====================================
 
 df.columns = df.columns.astype(str).str.strip()
@@ -79,7 +63,6 @@ if not all(col in df.columns for col in required_columns):
     st.write(df.columns.tolist())
     st.stop()
 
-# 지역명 빈칸 채우기
 df["자치구별(2)"] = (
     df["자치구별(2)"]
     .replace("", pd.NA)
@@ -88,7 +71,6 @@ df["자치구별(2)"] = (
 
 df["취득현황별(2)"] = df["취득현황별(2)"].astype(str).str.strip()
 
-# 연도별 분기 열 찾기
 quarter_columns = [
     col for col in df.columns
     if "/" in col and str(col)[:4].isdigit()
@@ -98,7 +80,6 @@ if not quarter_columns:
     st.error("연도별 분기 데이터 열을 찾을 수 없습니다.")
     st.stop()
 
-# 숫자 데이터 변환
 for col in quarter_columns:
     df[col] = (
         df[col]
@@ -121,7 +102,7 @@ district_df = df[
 ].copy()
 
 # =====================================
-# 5. 데이터 분석용 형태로 변환
+# 4. 데이터 분석용 형태로 변환
 # =====================================
 
 data = district_df.melt(
@@ -140,7 +121,7 @@ data["연도"] = data["연도분기"].str[:4]
 data["분기"] = data["연도분기"].str[-3:]
 
 # =====================================
-# 6. 전체 통계 계산
+# 5. 전체 통계 계산
 # =====================================
 
 district_rank = (
@@ -164,7 +145,7 @@ lowest_district = district_rank.index[-1]
 lowest_count = int(district_rank.iloc[-1])
 
 # =====================================
-# 7. 전체 분석 요약
+# 6. 전체 분석 요약
 # =====================================
 
 st.divider()
@@ -177,7 +158,7 @@ col2.metric("취득 건수 1위", top_district)
 col3.metric("전체 취득 건수", f"{total_count:,}건")
 
 # =====================================
-# 8. 자치구 TOP 10
+# 7. 자치구 TOP 10
 # =====================================
 
 st.divider()
@@ -185,15 +166,12 @@ st.subheader("🏆 1. 부동산 취득 건수 TOP 10")
 
 top10 = district_rank.head(10).sort_values(ascending=True)
 
-st.bar_chart(
-    top10,
-    horizontal=True
-)
+st.bar_chart(top10, horizontal=True)
 
 st.caption("전체 분석 기간의 누적 취득 건수입니다.")
 
 # =====================================
-# 9. 전체 자치구 순위
+# 8. 전체 자치구 순위
 # =====================================
 
 st.divider()
@@ -215,7 +193,7 @@ st.dataframe(
 )
 
 # =====================================
-# 10. 자치구 비교
+# 9. 자치구 비교
 # =====================================
 
 st.divider()
@@ -240,7 +218,7 @@ else:
     st.info("자치구를 선택해 주세요.")
 
 # =====================================
-# 11. 연도별 취득 추이
+# 10. 연도별 취득 추이
 # =====================================
 
 st.divider()
@@ -257,7 +235,7 @@ st.line_chart(yearly_data)
 st.caption("2014년은 4분기 자료만 포함되어 있습니다.")
 
 # =====================================
-# 12. 소유자 유형별 분석
+# 11. 소유자 유형별 분석
 # =====================================
 
 st.divider()
@@ -275,7 +253,7 @@ st.dataframe(
 )
 
 # =====================================
-# 13. 연도별 상세 분석
+# 12. 연도별 상세 분석
 # =====================================
 
 st.divider()
@@ -313,7 +291,7 @@ year_district = (
 st.bar_chart(year_district, horizontal=True)
 
 # =====================================
-# 14. 소유자 유형별 상세 분석
+# 13. 소유자 유형별 상세 분석
 # =====================================
 
 st.divider()
@@ -337,7 +315,7 @@ category_yearly = (
 st.line_chart(category_yearly)
 
 # =====================================
-# 15. 분석 결과 요약
+# 14. 분석 결과
 # =====================================
 
 st.divider()
